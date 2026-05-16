@@ -1,0 +1,6 @@
+{
+  "name": "Rubber Inventory Manager",
+  "description": "Inventory management application that reads from Google Sheets and calculates real-time rubber stock levels and estimated depletion times.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
