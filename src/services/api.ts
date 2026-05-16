@@ -58,7 +58,7 @@ function parseSheetDate(dateStr: string): Date | null {
 export async function fetchUsers(): Promise<Record<string, {password: string, role: string}>> {
   const users: Record<string, {password: string, role: string}> = {};
   try {
-    const response = await fetch(`/api/sheet?id=${USERS_SHEET_ID}`);
+    const response = await fetch(`https://docs.google.com/spreadsheets/d/${USERS_SHEET_ID}/export?format=csv`);
     if (!response.ok) return users;
     
     const csvText = await response.text();
@@ -88,7 +88,7 @@ export async function fetchConsumptionRates(): Promise<Record<string, number>> {
   const consumptionRates: Record<string, number> = {};
   
   try {
-    const response = await fetch(`/api/sheet?id=${CONSUMPTION_SHEET_ID}`);
+    const response = await fetch(`https://docs.google.com/spreadsheets/d/${CONSUMPTION_SHEET_ID}/export?format=csv`);
     if (!response.ok) return consumptionRates;
     
     const csvText = await response.text();
@@ -130,7 +130,7 @@ export async function fetchInventoryData(): Promise<{ records: InventoryRawRecor
 
   for (const [section, sheetId] of Object.entries(SHEET_IDS)) {
     try {
-      const response = await fetch(`/api/sheet?id=${sheetId}`);
+      const response = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
       if (!response.ok) {
         errors.push(`Failed to fetch ${section}: Google Sheet access denied. Ensure "Anyone with the link can view".`);
         continue;
