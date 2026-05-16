@@ -45,9 +45,17 @@ export function Login() {
             <PackageOpen className="w-10 h-10 text-white" />
           </div>
         </div>
-        <h2 className="mt-6 text-center text-2xl font-bold tracking-tight text-slate-900">
+        <div className="mt-6 text-center">
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 uppercase whitespace-nowrap">
+            MAXXIS RUBBER INDIA PVT LTD
+          </h2>
+          <h3 className="mt-2 text-xl font-bold tracking-tight text-indigo-600">
+            Final rubber inventory
+          </h3>
+        </div>
+        <h4 className="mt-6 text-center text-lg font-bold tracking-tight text-slate-900">
           Sign in to your account
-        </h2>
+        </h4>
         <p className="mt-2 text-center text-sm text-slate-500">
           Enter your User ID and Password to continue
         </p>
