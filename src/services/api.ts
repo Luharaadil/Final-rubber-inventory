@@ -58,7 +58,7 @@ function parseSheetDate(dateStr: string): Date | null {
 export async function fetchUsers(): Promise<Record<string, {password: string, role: string}>> {
   const users: Record<string, {password: string, role: string}> = {};
   try {
-    const response = await fetch(`https://docs.google.com/spreadsheets/d/${USERS_SHEET_ID}/export?format=csv`);
+    const response = await fetch(`https://docs.google.com/spreadsheets/d/${USERS_SHEET_ID}/export?format=csv&gid=1782887198`);
     if (!response.ok) return users;
     
     const csvText = await response.text();
