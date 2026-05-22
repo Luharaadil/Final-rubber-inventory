@@ -1,4 +1,3 @@
-import Papa from "papaparse";
 import { parse, isValid } from "date-fns";
 import { InventoryRawRecord } from "../types";
 
@@ -10,6 +9,53 @@ const SHEET_IDS = {
 
 const USERS_SHEET_ID = "1GHwq2tHt0ZDwuGHfTZSov6b2JgfURUKt7c8WLZWPGKs";
 const CONSUMPTION_SHEET_ID = "1m79DT6yZNg_qJLzMikzVXIV84pFRq6NkItMDA-Wd6P8";
+
+// --- JSONP Helper for Google Sheets ---
+async function fetchSheetData(sheetId: string, gid?: string): Promise<string[][]> {
+  return new Promise((resolve, reject) => {
+    const cbName = 'sheet_cb_' + Math.random().toString(36).substring(2, 11);
+    const tqx = `out:json;responseHandler:${cbName}`;
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=${tqx}${gid ? `&gid=${gid}` : ''}`;
+    
+    const script = document.createElement('script');
+    script.src = url;
+    
+    (window as any)[cbName] = (data: any) => {
+      document.head.removeChild(script);
+      delete (window as any)[cbName];
+      
+      try {
+        const rows: string[][] = [];
+        if (data && data.table && data.table.cols) {
+          rows.push(data.table.cols.map((c: any) => c ? String(c.label || '') : ''));
+        }
+        if (data && data.table && data.table.rows) {
+          for (const row of data.table.rows) {
+            if (!row || !row.c) continue;
+            const rData = row.c.map((cell: any) => {
+              if (!cell) return '';
+              if (cell.f !== undefined && cell.f !== null) return String(cell.f);
+              if (cell.v !== undefined && cell.v !== null) return String(cell.v);
+              return '';
+            });
+            rows.push(rData);
+          }
+        }
+        resolve(rows);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    
+    script.onerror = () => {
+      document.head.removeChild(script);
+      delete (window as any)[cbName];
+      reject(new Error("JSONP fetch failed"));
+    };
+    
+    document.head.appendChild(script);
+  });
+}
 
 // Common date formats in sheets: MM/dd/yyyy HH:mm:ss
 function parseSheetDate(dateStr: string): Date | null {
@@ -58,26 +104,16 @@ function parseSheetDate(dateStr: string): Date | null {
 export async function fetchUsers(): Promise<Record<string, {password: string, role: string}>> {
   const users: Record<string, {password: string, role: string}> = {};
   try {
-    const response = await fetch(`/api/sheet?id=${USERS_SHEET_ID}&gid=1782887198`);
-    if (!response.ok) return users;
-    
-    const csvText = await response.text();
-    Papa.parse(csvText, {
-      header: false,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const rows = results.data as string[][];
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (row.length >= 3) {
-            users[row[0].trim()] = {
-              password: row[1].trim(),
-              role: row[2].trim(),
-            };
-          }
-        }
+    const rows = await fetchSheetData(USERS_SHEET_ID, "1782887198");
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length >= 3 && row[0]) {
+        users[row[0].trim()] = {
+          password: String(row[1] || "").trim(),
+          role: String(row[2] || "").trim(),
+        };
       }
-    });
+    }
   } catch (err) {
     console.error("Error fetching users:", err);
   }
@@ -88,35 +124,25 @@ export async function fetchConsumptionRates(): Promise<Record<string, number>> {
   const consumptionRates: Record<string, number> = {};
   
   try {
-    const response = await fetch(`/api/sheet?id=${CONSUMPTION_SHEET_ID}`);
-    if (!response.ok) return consumptionRates;
-    
-    const csvText = await response.text();
-    Papa.parse(csvText, {
-      header: false,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const rows = results.data as string[][];
-        // O column is index 14, T column is index 19. Start from 4th row (index 3)
-        for (let i = 3; i < rows.length; i++) {
-          const row = rows[i];
-          if (row.length > 19) {
-            const rawMaterial = row[14] || "";
-            const batchesStr = row[19] || "";
-            
-            const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
-            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
-            
-            if (rubberCode) {
-              const batches = parseFloat(batchesStr);
-              if (!isNaN(batches)) {
-                consumptionRates[rubberCode] = batches;
-              }
-            }
+    const rows = await fetchSheetData(CONSUMPTION_SHEET_ID);
+    // O column is index 14, T column is index 19. Start from 4th row (index 3)
+    for (let i = 3; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length > 19) {
+        const rawMaterial = String(row[14] || "");
+        const batchesStr = String(row[19] || "");
+        
+        const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
+        const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
+        
+        if (rubberCode) {
+          const batches = parseFloat(batchesStr);
+          if (!isNaN(batches)) {
+            consumptionRates[rubberCode] = batches;
           }
         }
       }
-    });
+    }
   } catch (err) {
     console.error("Error fetching consumption rates:", err);
   }
@@ -130,65 +156,47 @@ export async function fetchInventoryData(): Promise<{ records: InventoryRawRecor
 
   for (const [section, sheetId] of Object.entries(SHEET_IDS)) {
     try {
-      const response = await fetch(`/api/sheet?id=${sheetId}`);
-      if (!response.ok) {
-        errors.push(`Failed to fetch ${section}: Google Sheet access denied. Ensure "Anyone with the link can view".`);
-        continue;
-      }
+      const rows = await fetchSheetData(sheetId);
       
-      const csvText = await response.text();
-      
-      if (csvText.startsWith("<!DOCTYPE html>")) {
-        errors.push(`Failed to fetch ${section}: Received HTML. Ensure the sheet is public.`);
-        continue;
+      // Columns based on user input:
+      // A (0) = Date/Time
+      // C (2) = Barcode
+      // F (5) = Material Name
+      // G (6) = Weight
+      for (let i = 1; i < rows.length; i++) { // Skip header row
+        const row = rows[i];
+        if (!row || row.length < 7) continue;
+        
+        const dateStr = String(row[0] || "");
+        const barcode = String(row[2] || "");
+        const rawMaterial = String(row[5] || "");
+        const weightStr = String(row[6] || "").replace(/,/g, ''); // Handle comma thousands separator just in case
+        
+        if (!dateStr || !rawMaterial) continue;
+        
+        const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
+        const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
+        
+        if (!rubberCode) continue;
+
+        const weight = parseFloat(weightStr);
+        if (isNaN(weight)) continue;
+
+        const timestamp = parseSheetDate(dateStr);
+        if (!timestamp) continue;
+
+        allRecords.push({
+          timestamp,
+          barcode,
+          rubberCode,
+          weight,
+          section,
+          isFinalRubber: !!rubberMatch
+        });
       }
-
-      Papa.parse(csvText, {
-        header: false, // We'll rely on column indices since headers might vary
-        skipEmptyLines: true,
-        complete: (results) => {
-          // Columns based on user input:
-          // A (0) = Date/Time
-          // C (2) = Barcode
-          // F (5) = Material Name
-          // G (6) = Weight
-          const rows = results.data as string[][];
-          
-          for (let i = 1; i < rows.length; i++) { // Skip header row
-            const row = rows[i];
-            
-            const dateStr = row[0];
-            const barcode = row[2] || "";
-            const rawMaterial = row[5] || "";
-            const weightStr = row[6] || "";
-            
-            if (!dateStr || !rawMaterial) continue;
-            
-            const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
-            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
-            
-            if (!rubberCode) continue;
-
-            const weight = parseFloat(weightStr);
-            if (isNaN(weight)) continue;
-
-            const timestamp = parseSheetDate(dateStr);
-            if (!timestamp) continue;
-
-            allRecords.push({
-              timestamp,
-              barcode,
-              rubberCode,
-              weight,
-              section,
-              isFinalRubber: !!rubberMatch
-            });
-          }
-        },
-      });
     } catch (err) {
       console.error(`Error processing ${section}:`, err);
-      errors.push(`Error processing ${section}: ${err instanceof Error ? err.message : "Unknown error"}`);
+      errors.push(`Failed to fetch ${section}: Google Sheet access denied. Ensure "Anyone with the link can view".`);
     }
   }
 
