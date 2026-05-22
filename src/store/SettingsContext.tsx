@@ -7,12 +7,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     B: { start: "11:00", end: "19:00" },
     C: { start: "19:00", end: "05:00" },
   },
-  consumptionRates: {
-    "0021F": 500,
-    "0607F": 400,
-    "7716F": 300,
-    "6013F": 600,
-  },
+  consumptionRates: {},
 };
 
 interface SettingsContextType {
@@ -73,10 +68,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const syncConsumption = (rates: Record<string, number>) => {
     setSettings((prev) => ({
       ...prev,
-      consumptionRates: {
-        ...prev.consumptionRates,
-        ...rates
-      }
+      consumptionRates: rates
     }));
   };
 

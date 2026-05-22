@@ -30,33 +30,103 @@ export function filterRecordsByShift(
   return records.filter((r) => isWithinInterval(r.timestamp, { start: startTime, end: endTime }));
 }
 
-export function calculateStocks(records: InventoryRawRecord[], settings: AppSettings): RubberStock[] {
+export function calculateStocks(records: InventoryRawRecord[], settings: AppSettings, allRecords?: InventoryRawRecord[]): RubberStock[] {
   const stockMap = new Map<string, RubberStock>();
 
   for (const record of records) {
-    const key = `${record.section}-${record.rubberCode}`;
+    let code = record.rubberCode;
+    if (code === "A19010090") {
+      code = "0.955MM";
+    }
+    const key = `${record.section}-${code}`;
     if (!stockMap.has(key)) {
       stockMap.set(key, {
-        rubberCode: record.rubberCode,
+        rubberCode: code,
         section: record.section,
         totalWeight: 0,
         totalBatches: 0,
         estimatedHoursLeft: null,
+        isFinalRubber: record.isFinalRubber,
         items: [],
       });
     }
 
     const stock = stockMap.get(key)!;
     stock.totalWeight += record.weight;
-    stock.items.push(record);
+    stock.items.push({...record, rubberCode: code});
   }
+
+  // Ensure all consumed rubbers are shown even if inventory is 0
+  if (settings.consumptionRates) {
+    for (const rubberCode of Object.keys(settings.consumptionRates)) {
+      const rate = settings.consumptionRates[rubberCode];
+      if (rate > 0) {
+        const exists = Array.from(stockMap.values()).some((s) => s.rubberCode === rubberCode);
+        if (!exists) {
+          // Try to find historical section, else default
+          let section = "Extrusion";
+          let isFinalRubber = !!rubberCode.match(/^(\d{4}F)/i);
+          if (allRecords) {
+            const past = allRecords.find((r) => r.rubberCode === rubberCode);
+            if (past) {
+              section = past.section;
+              isFinalRubber = past.isFinalRubber ?? isFinalRubber;
+            }
+          }
+          const key = `${section}-${rubberCode}`;
+          stockMap.set(key, {
+            rubberCode,
+            section,
+            totalWeight: 0,
+            totalBatches: 0,
+            estimatedHoursLeft: 0,
+            isFinalRubber,
+            items: [],
+          });
+        }
+      }
+    }
+  }
+
+  const ROLL_WEIGHTS: Record<string, number> = {
+    "0.955MM": 468,
+    "N723J22": 770,
+    "N723I22": 770,
+    "N728122": 754,
+    "N728I22": 754,
+    "N728J22": 754,
+    "N725122": 768,
+    "N725J22": 768,
+    "N725I22": 768,
+    "NA22GDP": 395
+  };
 
   const results: RubberStock[] = [];
   for (const stock of Array.from(stockMap.values())) {
-    stock.totalBatches = stock.totalWeight / BATCH_WEIGHT_KG;
+    const dailyConsumptionBatches = settings.consumptionRates ? settings.consumptionRates[stock.rubberCode] : 0;
+    
+    // Extrusion "RM16", "RM32", "RM55" should not display at all
+    if (stock.section === "Extrusion" && ["RM16", "RM32", "RM55"].includes(stock.rubberCode)) {
+      continue;
+    }
+
+    // Don't show anything with <= 0 inventory and <= 0 usage
+    if (stock.totalWeight <= 0 && (!dailyConsumptionBatches || dailyConsumptionBatches <= 0)) {
+      continue;
+    }
+
+    if (stock.isFinalRubber) {
+      stock.totalBatches = stock.totalWeight / BATCH_WEIGHT_KG;
+    } else {
+      if (stock.rubberCode in ROLL_WEIGHTS) {
+        stock.totalBatches = stock.items.length;
+      } else {
+        // Fallback for any other non-final rubbers
+        stock.totalBatches = Math.round(stock.totalWeight);
+      }
+    }
     
     // settings.consumptionRates is in batches/day now (from fetchConsumptionRates)
-    const dailyConsumptionBatches = settings.consumptionRates[stock.rubberCode];
     if (dailyConsumptionBatches && dailyConsumptionBatches > 0) {
       // Hours left = Total Batches / (Consumption Batches per Hour)
       // Consumption Batches per Hour = dailyConsumptionBatches / 24

@@ -8,7 +8,7 @@ import { useAuth } from "../store/AuthContext";
 import { filterRecordsByShift, calculateStocks } from "../lib/inventoryLogic";
 import { SettingsModal } from "./SettingsModal";
 import { DetailsModal } from "./DetailsModal";
-import { Settings2, RefreshCw, Calendar, Clock, PackageOpen, AlertCircle, Camera, LogOut } from "lucide-react";
+import { Settings2, RefreshCw, Calendar, Clock, PackageOpen, AlertCircle, Camera, LogOut, Copy } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 
@@ -21,9 +21,11 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [copying, setCopying] = useState(false);
+  const [copyingText, setCopyingText] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedShift, setSelectedShift] = useState<ShiftType | "ALL">("ALL");
+  const [filterType, setFilterType] = useState<"ALL_RUBBER" | "OTHER">("ALL_RUBBER");
 
   const [filteredStocks, setFilteredStocks] = useState<RubberStock[]>([]);
   
@@ -65,7 +67,7 @@ export function Dashboard() {
 
   useEffect(() => {
     const filtered = filterRecordsByShift(allRecords, selectedDate, selectedShift, settings);
-    const stocks = calculateStocks(filtered, settings);
+    const stocks = calculateStocks(filtered, settings, allRecords);
     setFilteredStocks(stocks);
   }, [allRecords, selectedDate, selectedShift, settings]);
 
@@ -122,32 +124,93 @@ export function Dashboard() {
     }
   };
 
-  const { totalBatches, avgHours } = useMemo(() => {
-    let t = 0;
-    let sumHrs = 0;
-    let countHrs = 0;
-    filteredStocks.forEach(s => {
-      t += s.totalBatches;
-      if (s.estimatedHoursLeft !== null) {
-         sumHrs += s.estimatedHoursLeft;
-         countHrs++;
-      }
+  const copyText = () => {
+    const recordsToCopy = filteredStocks.filter(s => filterType === "ALL_RUBBER" ? s.isFinalRubber : !s.isFinalRubber);
+    if (recordsToCopy.length === 0) return;
+
+    const headerTitle = filterType === "ALL_RUBBER" ? "Final Rubber Inventory" : "PLY/CH/BW Inventory";
+    const header = `${headerTitle}_${format(selectedDate, "ddMM")}_${format(new Date(), "hh:mm a")}\n\n`;
+
+    // Group by section
+    const groupedBySection: Record<string, RubberStock[]> = {};
+    recordsToCopy.forEach(s => {
+      if (!groupedBySection[s.section]) groupedBySection[s.section] = [];
+      groupedBySection[s.section].push(s);
     });
-    return {
-      totalBatches: t,
-      avgHours: countHrs > 0 ? (sumHrs / countHrs) : 0
-    };
-  }, [filteredStocks]);
+
+    const sectionStrings: string[] = [];
+    const sectionOrder = ["Extrusion", "Calendering", "Cutting"];
+    const presentSections = Object.keys(groupedBySection).sort((a, b) => {
+        let ia = sectionOrder.indexOf(a);
+        let ib = sectionOrder.indexOf(b);
+        if (ia === -1) ia = 99;
+        if (ib === -1) ib = 99;
+        if (ia !== ib) return ia - ib;
+        return a.localeCompare(b);
+    });
+
+    presentSections.forEach(section => {
+      const sectionHeader = `--------------------\n\n${section}:\n\n`;
+      const blocks = groupedBySection[section].map(stock => {
+        const hrsInfo = stock.estimatedHoursLeft !== null 
+          ? `(${stock.estimatedHoursLeft.toFixed(1)}/ 24 hr)` 
+          : ``;
+        return `>${stock.rubberCode}\n${stock.totalBatches.toFixed(0)} ${stock.isFinalRubber ? "batch" : "roll"} ${hrsInfo}`.trim();
+      }).join('\n\n');
+      sectionStrings.push(sectionHeader + blocks);
+    });
+
+    let fullText = header + sectionStrings.join('\n\n');
+
+    // Calculate totals across sections
+    const totals: Record<string, {batches: number, hours: number | null, isFinal: boolean}> = {};
+    recordsToCopy.forEach(s => {
+      if (!totals[s.rubberCode]) {
+        totals[s.rubberCode] = {batches: 0, hours: 0, isFinal: s.isFinalRubber};
+      }
+      totals[s.rubberCode].batches += s.totalBatches;
+    });
+
+    Object.keys(totals).forEach(rc => {
+        const dailyConsumptionBatches = settings.consumptionRates ? settings.consumptionRates[rc] : 0;
+        if (dailyConsumptionBatches && dailyConsumptionBatches > 0) {
+           totals[rc].hours = totals[rc].batches / (dailyConsumptionBatches / 24);
+        } else {
+           totals[rc].hours = null;
+        }
+    });
+
+    // For total block, only show if we have inventory (>0) and we are not in final rubber mode
+    const validTotals = Object.keys(totals).filter(rc => totals[rc].batches > 0);
+    
+    if (filterType !== "ALL_RUBBER" && validTotals.length > 0) {
+      fullText += '\n\n===============\n\nTotal:\n\n';
+      const totalBlocks = validTotals.map(rc => {
+          const hrsInfo = totals[rc].hours !== null 
+            ? `(${totals[rc].hours!.toFixed(1)}/ 24 hr)` 
+            : ``;
+          return `>${rc}\n${totals[rc].batches.toFixed(0)} ${totals[rc].isFinal ? "batch" : "roll"} ${hrsInfo}`.trim();
+      }).join('\n\n');
+      fullText += totalBlocks;
+    }
+
+    navigator.clipboard.writeText(fullText);
+    setCopyingText(true);
+    setTimeout(() => {
+      setCopyingText(false);
+    }, 2000);
+  };
 
   // Group stocks for table rendering
   const stocksBySection = useMemo(() => {
     const grouped: Record<string, RubberStock[]> = {};
-    filteredStocks.forEach(s => {
+    const recordsToDisplay = filteredStocks.filter(s => filterType === "ALL_RUBBER" ? s.isFinalRubber : !s.isFinalRubber);
+    recordsToDisplay.forEach(s => {
       if (!grouped[s.section]) grouped[s.section] = [];
       grouped[s.section].push(s);
     });
     return grouped;
-  }, [filteredStocks]);
+  }, [filteredStocks, filterType]);
 
   return (
     <div ref={printRef} className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 pb-16">
@@ -155,11 +218,20 @@ export function Dashboard() {
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex flex-col items-center flex-1">
             <h1 className="text-3xl font-black tracking-tight text-slate-800 uppercase text-center">
-              Final Rubber Inventory
+              {filterType === "ALL_RUBBER" ? "Final Rubber Inventory" : "PLY/CH/BW Inventory"}
             </h1>
           </div>
           
           <div className="flex items-center gap-3 absolute right-6 hide-in-print">
+            <button 
+              onClick={copyText}
+              className={`px-4 py-2 text-xs font-bold rounded shadow-sm transition-colors flex items-center ${
+                copyingText ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 border"
+              }`}
+            >
+              <Copy className="w-4 h-4 mr-1.5" />
+              {copyingText ? "Copied!" : "Copy Text"}
+            </button>
             <button 
               onClick={handleCopyPicture}
               className={cn(
@@ -189,46 +261,47 @@ export function Dashboard() {
       </header>
 
       <div className="bg-white border-b border-slate-200 relative z-20 print:hidden">
-        <div className="max-w-7xl mx-auto px-6 py-4 grid grid-cols-1 md:grid-cols-12 gap-6 items-end">
-          <div className="md:col-span-4 flex gap-4">
-            <div className="flex flex-col flex-1">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center">
-                <Calendar className="w-3.5 h-3.5 mr-1" /> Date
-              </label>
-              <input 
-                type="date"
-                value={format(selectedDate, "yyyy-MM-dd")}
-                onChange={(e) => {
-                  if (e.target.value) setSelectedDate(new Date(e.target.value));
-                }}
-                className="w-full text-sm border border-slate-200 rounded px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-700 bg-slate-50 shadow-inner"
-              />
-            </div>
-            <div className="flex flex-col flex-1">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center">
-                <Clock className="w-3.5 h-3.5 mr-1" /> Shift
-              </label>
-              <select
-                value={selectedShift}
-                onChange={(e) => setSelectedShift(e.target.value as ShiftType | "ALL")}
-                className="w-full text-sm border border-slate-200 rounded px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-700 bg-slate-50 shadow-inner"
-              >
-                <option value="ALL">All Day</option>
-                {Object.entries(settings.shifts).map(([shift, s]: [string, any]) => (
-                  <option key={shift} value={shift}>Shift {shift} ({s.start} - {s.end})</option>
-                ))}
-              </select>
-            </div>
+        <div className="max-w-7xl mx-auto px-6 py-4 flex gap-6 items-end">
+          <div className="flex flex-col flex-1 max-w-[200px]">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center">
+              <Calendar className="w-3.5 h-3.5 mr-1" /> Date
+            </label>
+            <input 
+              type="date"
+              value={format(selectedDate, "yyyy-MM-dd")}
+              onChange={(e) => {
+                if (e.target.value) setSelectedDate(new Date(e.target.value));
+              }}
+              className="w-full text-sm border border-slate-200 rounded px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-700 bg-slate-50 shadow-inner"
+            />
           </div>
-          <div className="md:col-span-8 flex justify-end gap-6 border-l border-slate-100 pl-6">
-             <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 shadow-sm flex-1 max-w-[200px]">
-               <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Total Available</h3>
-               <p className="text-2xl font-black text-indigo-700 mt-1">{totalBatches.toFixed(1)} <span className="text-xs text-indigo-500 font-bold ml-1">Batches</span></p>
-             </div>
-             <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 shadow-sm flex-1 max-w-[200px]">
-               <h3 className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider">Avg Remaining</h3>
-               <p className="text-2xl font-black text-emerald-700 mt-1">{avgHours.toFixed(1)} <span className="text-xs text-emerald-500 font-bold ml-1">Hours</span></p>
-             </div>
+          <div className="flex flex-col flex-1 max-w-[200px]">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center">
+              <Clock className="w-3.5 h-3.5 mr-1" /> Shift
+            </label>
+            <select
+              value={selectedShift}
+              onChange={(e) => setSelectedShift(e.target.value as ShiftType | "ALL")}
+              className="w-full text-sm border border-slate-200 rounded px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-700 bg-slate-50 shadow-inner"
+            >
+              <option value="ALL">All Day</option>
+              {Object.entries(settings.shifts).map(([shift, s]: [string, any]) => (
+                <option key={shift} value={shift}>Shift {shift} ({s.start} - {s.end})</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col flex-1 max-w-[200px]">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center">
+              <PackageOpen className="w-3.5 h-3.5 mr-1" /> Material Type
+            </label>
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value as "ALL_RUBBER" | "OTHER")}
+              className="w-full text-sm border border-slate-200 rounded px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-700 bg-slate-50 shadow-inner"
+            >
+              <option value="ALL_RUBBER">All Rubber</option>
+              <option value="OTHER">Other</option>
+            </select>
           </div>
         </div>
       </div>
@@ -264,80 +337,116 @@ export function Dashboard() {
                   <tr className="bg-slate-50 border-b-2 border-slate-200">
                     <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest w-40">Section</th>
                     <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest">Rubber Name</th>
-                    <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest text-center">Batches</th>
+                    <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest text-center">{filterType === "ALL_RUBBER" ? "Batches" : "Rolls"}</th>
                     <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest text-right">Weight (kg)</th>
                     <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest text-right">Remaining Hrs</th>
+                    <th className="px-6 py-4 text-[11px] font-black uppercase text-slate-400 tracking-widest text-right">Summary</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {["Extrusion", "Calendering", "Cutting"].map((sectionName) => {
-                    const sectionStocks = stocksBySection[sectionName];
-                    if (!sectionStocks || sectionStocks.length === 0) return null;
+                {["Extrusion", "Calendering", "Cutting"].map((sectionName, sectionIdx, sectionArr) => {
+                  const sectionStocks = stocksBySection[sectionName];
+                  if (!sectionStocks || sectionStocks.length === 0) return null;
 
-                    return sectionStocks.map((stock, index) => {
-                      const isDanger = stock.estimatedHoursLeft !== null && stock.estimatedHoursLeft < 4;
-                      const isOverstock = stock.estimatedHoursLeft !== null && stock.estimatedHoursLeft > 36;
-                      
-                      return (
-                        <tr 
-                          key={`${sectionName}-${stock.rubberCode}`} 
-                          onDoubleClick={() => handleOpenDetails(stock)}
-                          className={cn(
-                            "group cursor-pointer transition-colors",
-                            isDanger ? "bg-rose-50/50 hover:bg-rose-100/50" :
-                            isOverstock ? "bg-amber-50/30 hover:bg-amber-100/30" :
-                            "bg-white hover:bg-slate-50"
-                          )}
-                        >
-                          {index === 0 && (
-                            <td 
-                              rowSpan={sectionStocks.length} 
-                              className="px-6 py-4 border-r border-slate-100 align-middle text-center bg-slate-50/50"
-                            >
-                              <div className={cn(
-                                "text-xs font-bold uppercase tracking-widest px-3 py-1 inline-block rounded",
-                                sectionName === "Extrusion" ? "bg-indigo-100 text-indigo-700" :
-                                sectionName === "Calendering" ? "bg-emerald-100 text-emerald-700" :
-                                "bg-violet-100 text-violet-700"
-                              )}>
-                                {sectionName}
-                              </div>
-                            </td>
-                          )}
-                          <td className="px-6 py-4">
-                            <span className="font-mono font-bold text-slate-800 text-sm bg-slate-100 px-2.5 py-1 rounded">
-                              {stock.rubberCode}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span className="font-black text-slate-800 text-lg">
-                              {stock.totalBatches.toFixed(1)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <span className="font-medium text-slate-500">
-                              {stock.totalWeight.toFixed(0)} <span className="text-[10px]">kg</span>
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            {stock.estimatedHoursLeft === null ? (
-                              <span className="text-[10px] uppercase font-bold text-slate-300">N/A</span>
-                            ) : (
-                              <span className={cn(
-                                "px-3 py-1.5 rounded font-bold text-xs uppercase tracking-widest",
-                                isDanger ? "bg-rose-200 text-rose-800 ring-1 ring-rose-300" :
-                                isOverstock ? "bg-amber-200 text-amber-800 ring-1 ring-amber-300" :
-                                "bg-emerald-100 text-emerald-700"
-                              )}>
-                                {stock.estimatedHoursLeft.toFixed(1)} HR
-                              </span>
+                  const sectionTotalBatches = sectionStocks.reduce((sum, s) => sum + s.totalBatches, 0);
+                  const hoursArr = sectionStocks.map(s => s.estimatedHoursLeft).filter(h => h !== null) as number[];
+                  const sectionMinHrs = hoursArr.length > 0 ? Math.min(...hoursArr) : null;
+                  const sectionAvgHrs = hoursArr.length > 0 ? hoursArr.reduce((sum, h) => sum + h, 0) / hoursArr.length : null;
+
+                  return (
+                    <tbody key={sectionName} className={cn("divide-y divide-slate-100", sectionIdx < sectionArr.length - 1 ? "border-b-[4px] border-slate-200" : "")}>
+                      {sectionStocks.map((stock, index) => {
+                        const isDanger = stock.estimatedHoursLeft !== null && stock.estimatedHoursLeft < 4;
+                        const isOverstock = (stock.estimatedHoursLeft !== null && stock.estimatedHoursLeft > 36) || (stock.estimatedHoursLeft === null && stock.totalBatches > 0);
+                        
+                        return (
+                          <tr 
+                            key={`${sectionName}-${stock.rubberCode}`} 
+                            onDoubleClick={() => handleOpenDetails(stock)}
+                            className={cn(
+                              "group cursor-pointer transition-colors",
+                              isDanger ? "bg-rose-50/50 hover:bg-rose-100/50" :
+                              isOverstock ? "bg-amber-50/30 hover:bg-amber-100/30" :
+                              "bg-white hover:bg-slate-50"
                             )}
-                          </td>
-                        </tr>
-                      );
-                    });
-                  })}
-                </tbody>
+                          >
+                            {index === 0 && (
+                              <td 
+                                rowSpan={sectionStocks.length} 
+                                className="px-6 py-4 border-r border-slate-100 align-middle text-center bg-slate-50/50"
+                              >
+                                <div className={cn(
+                                  "text-xs font-bold uppercase tracking-widest px-3 py-1 inline-block rounded",
+                                  sectionName === "Extrusion" ? "bg-indigo-100 text-indigo-700" :
+                                  sectionName === "Calendering" ? "bg-emerald-100 text-emerald-700" :
+                                  "bg-violet-100 text-violet-700"
+                                )}>
+                                  {sectionName}
+                                </div>
+                              </td>
+                            )}
+                            <td className="px-6 py-4">
+                              <span className="font-mono font-bold text-slate-800 text-sm bg-slate-100 px-2.5 py-1 rounded">
+                                {stock.rubberCode}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="font-black text-slate-800 text-lg">
+                                {stock.isFinalRubber ? stock.totalBatches.toFixed(1) : stock.totalBatches.toFixed(0)}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <span className="font-medium text-slate-500">
+                                {stock.totalWeight.toFixed(0)} <span className="text-[10px]">kg</span>
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              {stock.estimatedHoursLeft === null ? (
+                                <span className={cn(
+                                  "px-3 py-1.5 rounded font-bold text-xs uppercase tracking-widest",
+                                  isOverstock ? "bg-amber-200 text-amber-800 ring-1 ring-amber-300" : "text-slate-300"
+                                )}>
+                                  N/A (No Usage)
+                                </span>
+                              ) : (
+                                <span className={cn(
+                                  "px-3 py-1.5 rounded font-bold text-xs uppercase tracking-widest",
+                                  isDanger ? "bg-rose-200 text-rose-800 ring-1 ring-rose-300" :
+                                  isOverstock ? "bg-amber-200 text-amber-800 ring-1 ring-amber-300" :
+                                  "bg-emerald-100 text-emerald-700"
+                                )}>
+                                  {stock.estimatedHoursLeft.toFixed(1)} HR
+                                </span>
+                              )}
+                            </td>
+                            {index === 0 && (
+                              <td 
+                                rowSpan={sectionStocks.length} 
+                                className="px-6 py-4 border-l border-slate-100 align-middle text-right bg-slate-50/50"
+                              >
+                                <div className="flex flex-col gap-4 justify-end whitespace-nowrap">
+                                  <div>
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Min<br/>Remaining</div>
+                                    <div className="text-sm font-black text-rose-600 mt-1">{sectionMinHrs !== null ? sectionMinHrs.toFixed(1) + ' HR' : 'N/A'}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Avg<br/>Remaining</div>
+                                    <div className="text-sm font-black text-emerald-600 mt-1">{sectionAvgHrs !== null ? sectionAvgHrs.toFixed(1) + ' HR' : 'N/A'}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Total<br/>Available</div>
+                                    <div className="text-sm font-black text-indigo-600 mt-1">
+                                      {sectionTotalBatches.toFixed(sectionTotalBatches % 1 === 0 ? 0 : 1)} {filterType === "ALL_RUBBER" ? "Batches" : "Rolls"}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  );
+                })}
               </table>
             </div>
             <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex gap-6 text-[10px] uppercase font-bold text-slate-400">

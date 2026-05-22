@@ -58,7 +58,7 @@ function parseSheetDate(dateStr: string): Date | null {
 export async function fetchUsers(): Promise<Record<string, {password: string, role: string}>> {
   const users: Record<string, {password: string, role: string}> = {};
   try {
-    const response = await fetch(`https://docs.google.com/spreadsheets/d/${USERS_SHEET_ID}/export?format=csv&gid=1782887198`);
+    const response = await fetch(`/api/sheet?id=${USERS_SHEET_ID}&gid=1782887198`);
     if (!response.ok) return users;
     
     const csvText = await response.text();
@@ -88,7 +88,7 @@ export async function fetchConsumptionRates(): Promise<Record<string, number>> {
   const consumptionRates: Record<string, number> = {};
   
   try {
-    const response = await fetch(`https://docs.google.com/spreadsheets/d/${CONSUMPTION_SHEET_ID}/export?format=csv`);
+    const response = await fetch(`/api/sheet?id=${CONSUMPTION_SHEET_ID}`);
     if (!response.ok) return consumptionRates;
     
     const csvText = await response.text();
@@ -105,7 +105,7 @@ export async function fetchConsumptionRates(): Promise<Record<string, number>> {
             const batchesStr = row[19] || "";
             
             const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
-            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : null;
+            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
             
             if (rubberCode) {
               const batches = parseFloat(batchesStr);
@@ -130,7 +130,7 @@ export async function fetchInventoryData(): Promise<{ records: InventoryRawRecor
 
   for (const [section, sheetId] of Object.entries(SHEET_IDS)) {
     try {
-      const response = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
+      const response = await fetch(`/api/sheet?id=${sheetId}`);
       if (!response.ok) {
         errors.push(`Failed to fetch ${section}: Google Sheet access denied. Ensure "Anyone with the link can view".`);
         continue;
@@ -164,10 +164,9 @@ export async function fetchInventoryData(): Promise<{ records: InventoryRawRecor
             
             if (!dateStr || !rawMaterial) continue;
             
-            // Check if material is a rubber: 4 digits + "F"
             const rubberMatch = rawMaterial.match(/^(\d{4}F)/i);
-            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : null;
-
+            const rubberCode = rubberMatch ? rubberMatch[1].toUpperCase() : rawMaterial.trim();
+            
             if (!rubberCode) continue;
 
             const weight = parseFloat(weightStr);
@@ -182,6 +181,7 @@ export async function fetchInventoryData(): Promise<{ records: InventoryRawRecor
               rubberCode,
               weight,
               section,
+              isFinalRubber: !!rubberMatch
             });
           }
         },

@@ -7,14 +7,17 @@ async function startServer() {
   const PORT = 3000;
 
   app.get("/api/sheet", async (req, res) => {
-    const { id } = req.query;
+    const { id, gid } = req.query;
     if (!id || typeof id !== "string") {
       res.status(400).json({ error: "Missing sheet ID" });
       return;
     }
 
     try {
-      const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+      let url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+      if (gid && typeof gid === "string") {
+        url += `&gid=${gid}`;
+      }
       const response = await fetch(url);
       
       if (!response.ok) {

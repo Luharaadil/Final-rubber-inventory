@@ -13,9 +13,10 @@ export interface AppSettings {
 export interface InventoryRawRecord {
   timestamp: Date;
   barcode: string;
-  rubberCode: string; // First 4 digits + "F"
+  rubberCode: string;
   weight: number;
   section: string;
+  isFinalRubber?: boolean;
 }
 
 export interface RubberStock {
@@ -24,6 +25,7 @@ export interface RubberStock {
   totalBatches: number;
   estimatedHoursLeft: number | null;
   section: string;
+  isFinalRubber?: boolean;
   items: InventoryRawRecord[];
 }
 
